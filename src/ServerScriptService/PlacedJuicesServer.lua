@@ -413,41 +413,68 @@ local function setupPlacedJuicesWatcher(player)
 			-- Callback cuando se añade un nuevo modelo
 			print("[PlacedJuices] Nuevo modelo detectado, recreando jugos para:", player.Name)
 
-			-- Limpiar todos los slots
-			local playerData = SlotTracker.getPlayerData(userId)
-			if playerData and playerData.slots then
-				for slotNumber in pairs(playerData.slots) do
-					SlotTracker.clearSlotData(userId, slotNumber)
-				end
+			-- Verificar que el jugador todavía existe
+			if not SlotTracker.hasPlayerData(userId) then
+				print("[PlacedJuices] Jugador desconectado durante cambio de modelo")
+				return
 			end
 
-			-- Recrear todos los jugos y CollectZone
+			-- Limpiar todos los slots CON DESTRUCCIÓN de objetos físicos
+			SlotTracker.cleanupAllSlotsWithDestruction(userId)
+
+			-- Limpiar y reconectar CollectZone
+			SlotTracker.clearCollectZoneConnection(userId)
+			SlotTracker.clearCollectZoneGuiConnection(userId)
+
+			-- Esperar a que el nuevo modelo se estabilice completamente
+			task.wait(0.8)
+
+			-- Verificar nuevamente que el jugador existe
+			if not SlotTracker.hasPlayerData(userId) then
+				print("[PlacedJuices] Jugador desconectado durante espera de modelo")
+				return
+			end
+
+			-- Recrear todos los jugos en el NUEVO modelo
 			local currentPlacedJuices = player:FindFirstChild("PlacedJuices")
 			if currentPlacedJuices then
-				task.wait(0.5)  -- Esperar a que el nuevo modelo se estabilice
+				print("[PlacedJuices] Recreando", #currentPlacedJuices:GetChildren(), "jugos en nuevo modelo")
 				for _, juiceFolder in ipairs(currentPlacedJuices:GetChildren()) do
 					if juiceFolder:IsA("Folder") then
-						processPlacedJuice(player, juiceFolder)
+						local slotValue = juiceFolder:FindFirstChild("Slot")
+						if slotValue and slotValue:IsA("IntValue") and slotValue.Value > 0 then
+							print("[PlacedJuices] Recreando jugo:", juiceFolder.Name, "en slot:", slotValue.Value)
+							processPlacedJuice(player, juiceFolder)
+						end
 					end
 				end
 			end
 
 			-- Reconectar CollectZone
-			task.wait(0.2)
+			task.wait(0.3)
+			print("[PlacedJuices] Reconectando CollectZone")
 			connectCollectZoneEvent(player)
 			setupCollectZoneGuiUpdater(player)
+
+			print("[PlacedJuices] Recreación completada para:", player.Name)
 		end,
 		function(player)
 			-- Callback cuando se remueve el modelo actual
 			print("[PlacedJuices] Modelo actual removido, limpiando jugos para:", player.Name)
 
-			-- Limpiar todos los slots
-			local playerData = SlotTracker.getPlayerData(userId)
-			if playerData and playerData.slots then
-				for slotNumber in pairs(playerData.slots) do
-					SlotTracker.clearSlotData(userId, slotNumber)
-				end
+			-- Verificar que el jugador todavía existe
+			if not SlotTracker.hasPlayerData(userId) then
+				return
 			end
+
+			-- Limpiar todos los slots CON DESTRUCCIÓN
+			SlotTracker.cleanupAllSlotsWithDestruction(userId)
+
+			-- Limpiar CollectZone
+			SlotTracker.clearCollectZoneConnection(userId)
+			SlotTracker.clearCollectZoneGuiConnection(userId)
+
+			print("[PlacedJuices] Limpieza completada, esperando nuevo modelo")
 		end
 	)
 

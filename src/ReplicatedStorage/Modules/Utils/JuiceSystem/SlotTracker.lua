@@ -132,6 +132,46 @@ function SlotTracker.clearSlotData(userId, slotNumber)
 	end
 end
 
+-- Limpia los datos de un slot Y destruye los objetos físicos (tools, billboards)
+-- Usar esta función cuando se cambia de modelo o se necesita destruir explícitamente
+function SlotTracker.clearSlotDataWithDestruction(userId, slotNumber)
+	if not playerData[userId] or not playerData[userId].slots then return end
+
+	local slotData = playerData[userId].slots[slotNumber]
+	if not slotData then return end
+
+	-- Destruir tool si existe
+	if slotData.tool and slotData.tool.Parent then
+		pcall(function()
+			slotData.tool:Destroy()
+		end)
+	end
+
+	-- Destruir billboard si existe
+	if slotData.billboard and slotData.billboard.Parent then
+		pcall(function()
+			slotData.billboard:Destroy()
+		end)
+	end
+
+	-- Desconectar colección si existe
+	if slotData.collectConnection then
+		pcall(function()
+			slotData.collectConnection:Disconnect()
+		end)
+	end
+
+	-- Limpiar todo
+	playerData[userId].slots[slotNumber] = nil
+
+	-- Limpiar cooldown
+	if playerData[userId].cooldowns then
+		playerData[userId].cooldowns[slotNumber] = nil
+	end
+
+	print("[SlotTracker] Slot", slotNumber, "limpiado con destrucción de objetos")
+end
+
 --------------------------------------------------------------
 -- GESTIÓN DE SLOTS DE COMPRA
 --------------------------------------------------------------
@@ -372,6 +412,31 @@ function SlotTracker.cleanupJuiceData(userId)
 	-- Limpiar CollectZone
 	SlotTracker.clearCollectZoneConnection(userId)
 	SlotTracker.clearCollectZoneGuiConnection(userId)
+end
+
+-- Limpia todos los slots CON DESTRUCCIÓN de objetos físicos
+-- Usar esta función cuando se cambia de modelo
+function SlotTracker.cleanupAllSlotsWithDestruction(userId)
+	if not playerData[userId] then return end
+
+	-- Limpiar todos los slots con destrucción
+	if playerData[userId].slots then
+		for slotNumber in pairs(playerData[userId].slots) do
+			SlotTracker.clearSlotDataWithDestruction(userId, slotNumber)
+		end
+	end
+
+	-- Limpiar conexiones de slots
+	if playerData[userId].slotConnections then
+		for juiceFolder, connection in pairs(playerData[userId].slotConnections) do
+			pcall(function()
+				connection:Disconnect()
+			end)
+		end
+		playerData[userId].slotConnections = {}
+	end
+
+	print("[SlotTracker] Todos los slots limpiados con destrucción de objetos para userId:", userId)
 end
 
 -- Limpia todos los datos de un jugador (compra de slots)
