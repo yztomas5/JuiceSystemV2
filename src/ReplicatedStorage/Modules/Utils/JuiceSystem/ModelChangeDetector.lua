@@ -45,9 +45,17 @@ function ModelChangeDetector.setupForJuices(player, slotTracker, onModelAdded, o
 					print("[ModelChangeDetector] Nuevo modelo detectado (ChildAdded), ejecutando callback para:", player.Name)
 					slotTracker.setCurrentModel(userId, child)
 
-					-- Ejecutar callback
+					-- Ejecutar callback en un thread separado para no bloquear
 					if onModelAdded then
-						onModelAdded(player, child)
+						task.spawn(function()
+							-- Esperar a que el modelo esté completamente cargado
+							-- Verificar que el modelo tenga Parent (no fue eliminado)
+							if child.Parent then
+								onModelAdded(player, child)
+							else
+								warn("[ModelChangeDetector] Modelo fue removido antes de cargar completamente")
+							end
+						end)
 					end
 				end
 			end

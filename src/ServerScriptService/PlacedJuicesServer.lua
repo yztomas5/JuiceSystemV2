@@ -428,24 +428,43 @@ local function setupPlacedJuicesWatcher(player)
 
 			-- CRÍTICO: Esperar a que el nuevo modelo tenga la estructura Slots cargada
 			print("[PlacedJuices] Esperando a que el nuevo modelo cargue la estructura Slots...")
-			local slotsFolder = newModel:WaitForChild("Slots", 10)
+
+			-- Verificar que el modelo no fue eliminado
+			if not newModel or not newModel.Parent then
+				warn("[PlacedJuices] El modelo fue eliminado antes de poder recrear jugos")
+				return
+			end
+
+			-- Esperar sin timeout - el modelo DEBE tener Slots
+			local slotsFolder = newModel:WaitForChild("Slots")
 			if not slotsFolder then
 				warn("[PlacedJuices] No se pudo encontrar Slots en el nuevo modelo")
 				return
 			end
 
-			local placeFolder = slotsFolder:WaitForChild("Place", 10)
+			-- Verificar que el modelo sigue existiendo
+			if not newModel.Parent then
+				warn("[PlacedJuices] El modelo fue eliminado durante la carga de Slots")
+				return
+			end
+
+			local placeFolder = slotsFolder:WaitForChild("Place")
 			if not placeFolder then
 				warn("[PlacedJuices] No se pudo encontrar Place en Slots")
 				return
 			end
 
 			-- Esperar un poco más para asegurar que todos los slots individuales estén cargados
-			task.wait(0.5)
+			task.wait(1)
 
-			-- Verificar nuevamente que el jugador existe
+			-- Verificar nuevamente que el jugador existe y el modelo sigue válido
 			if not SlotTracker.hasPlayerData(userId) then
 				print("[PlacedJuices] Jugador desconectado durante espera de modelo")
+				return
+			end
+
+			if not newModel.Parent then
+				warn("[PlacedJuices] El modelo fue eliminado durante la espera")
 				return
 			end
 
@@ -480,21 +499,34 @@ local function setupPlacedJuicesWatcher(player)
 						return
 					end
 
-					-- Verificar que el slot existe en el nuevo modelo
-					local slotModel = placeFolder:FindFirstChild(tostring(juiceInfo.slot))
+					-- Verificar que el modelo sigue válido
+					if not newModel.Parent then
+						warn("[PlacedJuices] El modelo fue eliminado durante recreación")
+						return
+					end
+
+					-- Esperar a que el slot específico esté cargado
+					local slotModel = placeFolder:WaitForChild(tostring(juiceInfo.slot), 5)
 					if slotModel then
 						print("[PlacedJuices] Recreando jugo:", juiceInfo.name, "en slot:", juiceInfo.slot)
 						processPlacedJuice(player, juiceInfo.folder)
 						task.wait(0.1) -- Pequeña pausa entre recreaciones
 					else
-						warn("[PlacedJuices] Slot", juiceInfo.slot, "no encontrado en nuevo modelo")
+						warn("[PlacedJuices] Slot", juiceInfo.slot, "no encontrado en nuevo modelo después de 5s")
 					end
 				end
 			end
 
-			-- Reconectar CollectZone (también esperando a que exista)
-			task.wait(0.2)
-			local collectZone = slotsFolder:WaitForChild("CollectZone", 10)
+			-- Reconectar CollectZone (esperando sin timeout)
+			print("[PlacedJuices] Esperando CollectZone...")
+			task.wait(0.5)
+
+			if not newModel.Parent then
+				warn("[PlacedJuices] El modelo fue eliminado antes de reconectar CollectZone")
+				return
+			end
+
+			local collectZone = slotsFolder:WaitForChild("CollectZone")
 			if collectZone then
 				print("[PlacedJuices] Reconectando CollectZone")
 				connectCollectZoneEvent(player)
