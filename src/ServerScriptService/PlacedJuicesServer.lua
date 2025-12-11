@@ -411,7 +411,9 @@ local function setupPlacedJuicesWatcher(player)
 		SlotTracker,
 		function(player, newModel)
 			-- Callback cuando se añade un nuevo modelo
-			print("[PlacedJuices] Nuevo modelo detectado, recreando jugos para:", player.Name)
+			print("[PlacedJuices] ========== INICIO CAMBIO DE MODELO ==========")
+			print("[PlacedJuices] Jugador:", player.Name)
+			print("[PlacedJuices] Nuevo modelo:", newModel.Name, "Parent:", newModel.Parent and newModel.Parent.Name or "nil")
 
 			-- Verificar que el jugador todavía existe
 			if not SlotTracker.hasPlayerData(userId) then
@@ -426,8 +428,41 @@ local function setupPlacedJuicesWatcher(player)
 			SlotTracker.clearCollectZoneConnection(userId)
 			SlotTracker.clearCollectZoneGuiConnection(userId)
 
+			-- FUNCIÓN DE RETRY para esperar con múltiples intentos
+			local function waitForChildWithRetry(parent, childName, maxAttempts)
+				maxAttempts = maxAttempts or 3
+				local timeoutPerAttempt = 15 -- 15 segundos por intento
+
+				for attempt = 1, maxAttempts do
+					print(string.format("[PlacedJuices] Intento %d/%d: Esperando '%s' en '%s'...",
+						attempt, maxAttempts, childName, parent.Name))
+
+					-- Verificar que el parent sigue válido
+					if not parent.Parent then
+						warn("[PlacedJuices] Parent fue eliminado durante la espera")
+						return nil
+					end
+
+					local child = parent:WaitForChild(childName, timeoutPerAttempt)
+					if child then
+						print(string.format("[PlacedJuices] ✓ '%s' encontrado en intento %d", childName, attempt))
+						return child
+					end
+
+					-- Si no es el último intento, esperar un poco antes de reintentar
+					if attempt < maxAttempts then
+						print(string.format("[PlacedJuices] ✗ '%s' no encontrado, reintentando en 2s...", childName))
+						task.wait(2)
+					end
+				end
+
+				warn(string.format("[PlacedJuices] FALLO: No se pudo encontrar '%s' después de %d intentos",
+					childName, maxAttempts))
+				return nil
+			end
+
 			-- CRÍTICO: Esperar a que el nuevo modelo tenga la estructura Slots cargada
-			print("[PlacedJuices] Esperando a que el nuevo modelo cargue la estructura Slots...")
+			print("[PlacedJuices] Esperando estructura del modelo...")
 
 			-- Verificar que el modelo no fue eliminado
 			if not newModel or not newModel.Parent then
@@ -435,10 +470,18 @@ local function setupPlacedJuicesWatcher(player)
 				return
 			end
 
-			-- Esperar sin timeout - el modelo DEBE tener Slots
-			local slotsFolder = newModel:WaitForChild("Slots")
+			-- Esperar a que Slots esté cargado con sistema de retry
+			local slotsFolder = waitForChildWithRetry(newModel, "Slots", 4)
 			if not slotsFolder then
-				warn("[PlacedJuices] No se pudo encontrar Slots en el nuevo modelo")
+				warn("[PlacedJuices] CRÍTICO: No se pudo encontrar Slots en el nuevo modelo")
+				warn("[PlacedJuices] Hijos actuales del modelo:", table.concat(
+					(function()
+						local names = {}
+						for _, child in ipairs(newModel:GetChildren()) do
+							table.insert(names, child.Name)
+						end
+						return names
+					end)(), ", "))
 				return
 			end
 
@@ -448,14 +491,24 @@ local function setupPlacedJuicesWatcher(player)
 				return
 			end
 
-			local placeFolder = slotsFolder:WaitForChild("Place")
+			-- Esperar a que Place esté cargado
+			local placeFolder = waitForChildWithRetry(slotsFolder, "Place", 4)
 			if not placeFolder then
-				warn("[PlacedJuices] No se pudo encontrar Place en Slots")
+				warn("[PlacedJuices] CRÍTICO: No se pudo encontrar Place en Slots")
+				warn("[PlacedJuices] Hijos actuales de Slots:", table.concat(
+					(function()
+						local names = {}
+						for _, child in ipairs(slotsFolder:GetChildren()) do
+							table.insert(names, child.Name)
+						end
+						return names
+					end)(), ", "))
 				return
 			end
 
-			-- Esperar un poco más para asegurar que todos los slots individuales estén cargados
-			task.wait(1)
+			-- Esperar más tiempo para asegurar que los slots individuales estén cargados
+			print("[PlacedJuices] Esperando carga completa de slots individuales...")
+			task.wait(2)
 
 			-- Verificar nuevamente que el jugador existe y el modelo sigue válido
 			if not SlotTracker.hasPlayerData(userId) then
@@ -468,7 +521,8 @@ local function setupPlacedJuicesWatcher(player)
 				return
 			end
 
-			print("[PlacedJuices] Estructura Slots cargada, comenzando recreación de jugos")
+			print("[PlacedJuices] ✓ Estructura Slots cargada completamente")
+			print("[PlacedJuices] Slots disponibles en Place:", #placeFolder:GetChildren())
 
 			-- Recrear todos los jugos en el NUEVO modelo
 			local currentPlacedJuices = player:FindFirstChild("PlacedJuices")
@@ -489,10 +543,10 @@ local function setupPlacedJuicesWatcher(player)
 					end
 				end
 
-				print("[PlacedJuices] Recreando", #juicesToRecreate, "jugos en nuevo modelo")
+				print("[PlacedJuices] 📋 Total de jugos a recrear:", #juicesToRecreate)
 
 				-- Recrear cada jugo
-				for _, juiceInfo in ipairs(juicesToRecreate) do
+				for i, juiceInfo in ipairs(juicesToRecreate) do
 					-- Verificar que el jugador todavía existe
 					if not SlotTracker.hasPlayerData(userId) then
 						print("[PlacedJuices] Jugador desconectado durante recreación")
@@ -505,37 +559,62 @@ local function setupPlacedJuicesWatcher(player)
 						return
 					end
 
-					-- Esperar a que el slot específico esté cargado
-					local slotModel = placeFolder:WaitForChild(tostring(juiceInfo.slot), 5)
+					print(string.format("[PlacedJuices] [%d/%d] Recreando jugo '%s' en slot %d...",
+						i, #juicesToRecreate, juiceInfo.name, juiceInfo.slot))
+
+					-- Esperar a que el slot específico esté cargado con retry
+					local slotModel = waitForChildWithRetry(placeFolder, tostring(juiceInfo.slot), 3)
 					if slotModel then
-						print("[PlacedJuices] Recreando jugo:", juiceInfo.name, "en slot:", juiceInfo.slot)
+						print(string.format("[PlacedJuices] ✓ Slot %d encontrado, procesando jugo...", juiceInfo.slot))
 						processPlacedJuice(player, juiceInfo.folder)
-						task.wait(0.1) -- Pequeña pausa entre recreaciones
+						task.wait(0.15) -- Pausa entre recreaciones
 					else
-						warn("[PlacedJuices] Slot", juiceInfo.slot, "no encontrado en nuevo modelo después de 5s")
+						warn(string.format("[PlacedJuices] ✗ FALLO: Slot %d no encontrado en nuevo modelo", juiceInfo.slot))
+						warn("[PlacedJuices] Slots disponibles:", table.concat(
+							(function()
+								local names = {}
+								for _, child in ipairs(placeFolder:GetChildren()) do
+									table.insert(names, child.Name)
+								end
+								return names
+							end)(), ", "))
 					end
 				end
+
+				print(string.format("[PlacedJuices] ✓ Recreación de jugos completada (%d jugos)", #juicesToRecreate))
+			else
+				print("[PlacedJuices] No se encontró PlacedJuices para el jugador")
 			end
 
-			-- Reconectar CollectZone (esperando sin timeout)
-			print("[PlacedJuices] Esperando CollectZone...")
-			task.wait(0.5)
+			-- Reconectar CollectZone
+			print("[PlacedJuices] Reconectando CollectZone...")
+			task.wait(1)
 
 			if not newModel.Parent then
 				warn("[PlacedJuices] El modelo fue eliminado antes de reconectar CollectZone")
 				return
 			end
 
-			local collectZone = slotsFolder:WaitForChild("CollectZone")
+			local collectZone = waitForChildWithRetry(slotsFolder, "CollectZone", 4)
 			if collectZone then
-				print("[PlacedJuices] Reconectando CollectZone")
+				print("[PlacedJuices] ✓ CollectZone encontrada, conectando eventos...")
 				connectCollectZoneEvent(player)
 				setupCollectZoneGuiUpdater(player)
+				print("[PlacedJuices] ✓ CollectZone reconectada exitosamente")
 			else
-				warn("[PlacedJuices] No se pudo encontrar CollectZone en el nuevo modelo")
+				warn("[PlacedJuices] ✗ FALLO CRÍTICO: No se pudo encontrar CollectZone")
+				warn("[PlacedJuices] Hijos de Slots:", table.concat(
+					(function()
+						local names = {}
+						for _, child in ipairs(slotsFolder:GetChildren()) do
+							table.insert(names, child.Name)
+						end
+						return names
+					end)(), ", "))
 			end
 
-			print("[PlacedJuices] Recreación completada para:", player.Name)
+			print("[PlacedJuices] ========== FIN CAMBIO DE MODELO ==========")
+			print("[PlacedJuices] ✓ Sistema completamente funcional para:", player.Name)
 		end,
 		function(player)
 			-- Callback cuando se remueve el modelo actual
