@@ -405,236 +405,213 @@ local function setupPlacedJuicesWatcher(player)
 		initializePlacedJuices(player)
 	end)
 
-	-- Configurar detección de cambio de modelo
-	ModelChangeDetector.setupForJuices(
-		player,
-		SlotTracker,
-		function(player, newModel)
-			-- Callback cuando se añade un nuevo modelo
-			print("[PlacedJuices] ========== INICIO CAMBIO DE MODELO ==========")
-			print("[PlacedJuices] Jugador:", player.Name)
-			print("[PlacedJuices] Nuevo modelo:", newModel.Name, "Parent:", newModel.Parent and newModel.Parent.Name or "nil")
+	-- SISTEMA DE MONITOREO CONTINUO DEL MODELO (NO DEPENDE DE EVENTOS)
+	-- Este sistema verifica cada segundo si el modelo cambió y recrea jugos automáticamente
+	local lastKnownModel = JuiceSystemUtils.findClonedModel(player)
+	SlotTracker.setCurrentModel(userId, lastKnownModel)
 
-			-- Verificar que el jugador todavía existe
-			if not SlotTracker.hasPlayerData(userId) then
-				print("[PlacedJuices] Jugador desconectado durante cambio de modelo")
-				return
-			end
+	local modelMonitorConnection = RunService.Heartbeat:Connect(function()
+		-- Solo verificar cada segundo
+		local currentTime = os.time()
+		local lastCheck = SlotTracker.getPlayerData(userId) and SlotTracker.getPlayerData(userId).lastModelCheck or 0
 
-			-- Limpiar todos los slots CON DESTRUCCIÓN de objetos físicos
-			SlotTracker.cleanupAllSlotsWithDestruction(userId)
-
-			-- Limpiar y reconectar CollectZone
-			SlotTracker.clearCollectZoneConnection(userId)
-			SlotTracker.clearCollectZoneGuiConnection(userId)
-
-			-- FUNCIÓN DE RETRY para esperar con múltiples intentos
-			local function waitForChildWithRetry(parent, childName, maxAttempts)
-				maxAttempts = maxAttempts or 3
-				local timeoutPerAttempt = 15 -- 15 segundos por intento
-
-				for attempt = 1, maxAttempts do
-					print(string.format("[PlacedJuices] Intento %d/%d: Esperando '%s' en '%s'...",
-						attempt, maxAttempts, childName, parent.Name))
-
-					-- Verificar que el parent sigue válido
-					if not parent.Parent then
-						warn("[PlacedJuices] Parent fue eliminado durante la espera")
-						return nil
-					end
-
-					local child = parent:WaitForChild(childName, timeoutPerAttempt)
-					if child then
-						print(string.format("[PlacedJuices] ✓ '%s' encontrado en intento %d", childName, attempt))
-						return child
-					end
-
-					-- Si no es el último intento, esperar un poco antes de reintentar
-					if attempt < maxAttempts then
-						print(string.format("[PlacedJuices] ✗ '%s' no encontrado, reintentando en 2s...", childName))
-						task.wait(2)
-					end
-				end
-
-				warn(string.format("[PlacedJuices] FALLO: No se pudo encontrar '%s' después de %d intentos",
-					childName, maxAttempts))
-				return nil
-			end
-
-			-- CRÍTICO: Esperar a que el nuevo modelo tenga la estructura Slots cargada
-			print("[PlacedJuices] Esperando estructura del modelo...")
-
-			-- Verificar que el modelo no fue eliminado
-			if not newModel or not newModel.Parent then
-				warn("[PlacedJuices] El modelo fue eliminado antes de poder recrear jugos")
-				return
-			end
-
-			-- Esperar a que Slots esté cargado con sistema de retry
-			local slotsFolder = waitForChildWithRetry(newModel, "Slots", 4)
-			if not slotsFolder then
-				warn("[PlacedJuices] CRÍTICO: No se pudo encontrar Slots en el nuevo modelo")
-				warn("[PlacedJuices] Hijos actuales del modelo:", table.concat(
-					(function()
-						local names = {}
-						for _, child in ipairs(newModel:GetChildren()) do
-							table.insert(names, child.Name)
-						end
-						return names
-					end)(), ", "))
-				return
-			end
-
-			-- Verificar que el modelo sigue existiendo
-			if not newModel.Parent then
-				warn("[PlacedJuices] El modelo fue eliminado durante la carga de Slots")
-				return
-			end
-
-			-- Esperar a que Place esté cargado
-			local placeFolder = waitForChildWithRetry(slotsFolder, "Place", 4)
-			if not placeFolder then
-				warn("[PlacedJuices] CRÍTICO: No se pudo encontrar Place en Slots")
-				warn("[PlacedJuices] Hijos actuales de Slots:", table.concat(
-					(function()
-						local names = {}
-						for _, child in ipairs(slotsFolder:GetChildren()) do
-							table.insert(names, child.Name)
-						end
-						return names
-					end)(), ", "))
-				return
-			end
-
-			-- Esperar más tiempo para asegurar que los slots individuales estén cargados
-			print("[PlacedJuices] Esperando carga completa de slots individuales...")
-			task.wait(2)
-
-			-- Verificar nuevamente que el jugador existe y el modelo sigue válido
-			if not SlotTracker.hasPlayerData(userId) then
-				print("[PlacedJuices] Jugador desconectado durante espera de modelo")
-				return
-			end
-
-			if not newModel.Parent then
-				warn("[PlacedJuices] El modelo fue eliminado durante la espera")
-				return
-			end
-
-			print("[PlacedJuices] ✓ Estructura Slots cargada completamente")
-			print("[PlacedJuices] Slots disponibles en Place:", #placeFolder:GetChildren())
-
-			-- Recrear todos los jugos en el NUEVO modelo
-			local currentPlacedJuices = player:FindFirstChild("PlacedJuices")
-			if currentPlacedJuices then
-				local juicesToRecreate = {}
-
-				-- Recolectar todos los jugos a recrear
-				for _, juiceFolder in ipairs(currentPlacedJuices:GetChildren()) do
-					if juiceFolder:IsA("Folder") then
-						local slotValue = juiceFolder:FindFirstChild("Slot")
-						if slotValue and slotValue:IsA("IntValue") and slotValue.Value > 0 then
-							table.insert(juicesToRecreate, {
-								folder = juiceFolder,
-								slot = slotValue.Value,
-								name = juiceFolder.Name
-							})
-						end
-					end
-				end
-
-				print("[PlacedJuices] 📋 Total de jugos a recrear:", #juicesToRecreate)
-
-				-- Recrear cada jugo
-				for i, juiceInfo in ipairs(juicesToRecreate) do
-					-- Verificar que el jugador todavía existe
-					if not SlotTracker.hasPlayerData(userId) then
-						print("[PlacedJuices] Jugador desconectado durante recreación")
-						return
-					end
-
-					-- Verificar que el modelo sigue válido
-					if not newModel.Parent then
-						warn("[PlacedJuices] El modelo fue eliminado durante recreación")
-						return
-					end
-
-					print(string.format("[PlacedJuices] [%d/%d] Recreando jugo '%s' en slot %d...",
-						i, #juicesToRecreate, juiceInfo.name, juiceInfo.slot))
-
-					-- Esperar a que el slot específico esté cargado con retry
-					local slotModel = waitForChildWithRetry(placeFolder, tostring(juiceInfo.slot), 3)
-					if slotModel then
-						print(string.format("[PlacedJuices] ✓ Slot %d encontrado, procesando jugo...", juiceInfo.slot))
-						processPlacedJuice(player, juiceInfo.folder)
-						task.wait(0.15) -- Pausa entre recreaciones
-					else
-						warn(string.format("[PlacedJuices] ✗ FALLO: Slot %d no encontrado en nuevo modelo", juiceInfo.slot))
-						warn("[PlacedJuices] Slots disponibles:", table.concat(
-							(function()
-								local names = {}
-								for _, child in ipairs(placeFolder:GetChildren()) do
-									table.insert(names, child.Name)
-								end
-								return names
-							end)(), ", "))
-					end
-				end
-
-				print(string.format("[PlacedJuices] ✓ Recreación de jugos completada (%d jugos)", #juicesToRecreate))
-			else
-				print("[PlacedJuices] No se encontró PlacedJuices para el jugador")
-			end
-
-			-- Reconectar CollectZone
-			print("[PlacedJuices] Reconectando CollectZone...")
-			task.wait(1)
-
-			if not newModel.Parent then
-				warn("[PlacedJuices] El modelo fue eliminado antes de reconectar CollectZone")
-				return
-			end
-
-			local collectZone = waitForChildWithRetry(slotsFolder, "CollectZone", 4)
-			if collectZone then
-				print("[PlacedJuices] ✓ CollectZone encontrada, conectando eventos...")
-				connectCollectZoneEvent(player)
-				setupCollectZoneGuiUpdater(player)
-				print("[PlacedJuices] ✓ CollectZone reconectada exitosamente")
-			else
-				warn("[PlacedJuices] ✗ FALLO CRÍTICO: No se pudo encontrar CollectZone")
-				warn("[PlacedJuices] Hijos de Slots:", table.concat(
-					(function()
-						local names = {}
-						for _, child in ipairs(slotsFolder:GetChildren()) do
-							table.insert(names, child.Name)
-						end
-						return names
-					end)(), ", "))
-			end
-
-			print("[PlacedJuices] ========== FIN CAMBIO DE MODELO ==========")
-			print("[PlacedJuices] ✓ Sistema completamente funcional para:", player.Name)
-		end,
-		function(player)
-			-- Callback cuando se remueve el modelo actual
-			print("[PlacedJuices] Modelo actual removido, limpiando jugos para:", player.Name)
-
-			-- Verificar que el jugador todavía existe
-			if not SlotTracker.hasPlayerData(userId) then
-				return
-			end
-
-			-- Limpiar todos los slots CON DESTRUCCIÓN
-			SlotTracker.cleanupAllSlotsWithDestruction(userId)
-
-			-- Limpiar CollectZone
-			SlotTracker.clearCollectZoneConnection(userId)
-			SlotTracker.clearCollectZoneGuiConnection(userId)
-
-			print("[PlacedJuices] Limpieza completada, esperando nuevo modelo")
+		if currentTime <= lastCheck then
+			return
 		end
-	)
+
+		-- Actualizar último check
+		if SlotTracker.hasPlayerData(userId) then
+			local playerData = SlotTracker.getPlayerData(userId)
+			if playerData then
+				playerData.lastModelCheck = currentTime
+			end
+		end
+
+		-- Obtener modelo actual
+		local currentModel = JuiceSystemUtils.findClonedModel(player)
+		local previousModel = SlotTracker.getCurrentModel(userId)
+
+		-- Si el modelo cambió, recrear jugos
+		if currentModel ~= previousModel then
+			print("[PlacedJuices] ⚠️ CAMBIO DE MODELO DETECTADO (Polling)")
+			print("[PlacedJuices] Modelo anterior:", previousModel and previousModel.Name or "nil")
+			print("[PlacedJuices] Modelo nuevo:", currentModel and currentModel.Name or "nil")
+
+			-- Actualizar referencia
+			SlotTracker.setCurrentModel(userId, currentModel)
+
+			-- Si hay un nuevo modelo, recrear jugos
+			if currentModel and currentModel.Parent then
+				task.spawn(function()
+					recreateAllJuicesForNewModel(player, currentModel)
+				end)
+			else
+				-- Si no hay modelo, limpiar todo
+				print("[PlacedJuices] No hay modelo, limpiando jugos")
+				SlotTracker.cleanupAllSlotsWithDestruction(userId)
+				SlotTracker.clearCollectZoneConnection(userId)
+				SlotTracker.clearCollectZoneGuiConnection(userId)
+			end
+		end
+	end)
+
+	-- Guardar conexión de monitoreo
+	SlotTracker.setModelMonitorConnection(userId, modelMonitorConnection)
+
+	-- FUNCIÓN PARA RECREAR TODOS LOS JUGOS (MOVIDA FUERA DEL CALLBACK)
+	function recreateAllJuicesForNewModel(player, newModel)
+		print("[PlacedJuices] ========================================")
+		print("[PlacedJuices] 🔄 RECREANDO JUGOS PARA NUEVO MODELO")
+		print("[PlacedJuices] Jugador:", player.Name)
+		print("[PlacedJuices] Modelo:", newModel.Name)
+		print("[PlacedJuices] ========================================")
+
+		local userId = player.UserId
+
+		-- Verificar que el jugador todavía existe
+		if not SlotTracker.hasPlayerData(userId) then
+			print("[PlacedJuices] ❌ Jugador desconectado, abortando")
+			return
+		end
+
+		-- Limpiar todos los slots CON DESTRUCCIÓN de objetos físicos
+		print("[PlacedJuices] 🧹 Limpiando slots antiguos...")
+		SlotTracker.cleanupAllSlotsWithDestruction(userId)
+		SlotTracker.clearCollectZoneConnection(userId)
+		SlotTracker.clearCollectZoneGuiConnection(userId)
+
+		-- Esperar a que el modelo esté completamente cargado
+		print("[PlacedJuices] ⏳ Esperando carga del modelo...")
+		task.wait(3) -- Espera inicial generosa
+
+		-- Verificar que el modelo sigue existiendo
+		if not newModel or not newModel.Parent then
+			warn("[PlacedJuices] ❌ Modelo fue eliminado durante la espera")
+			return
+		end
+
+		-- Buscar estructura del modelo con espera activa
+		local slotsFolder = newModel:FindFirstChild("Slots")
+		local attempts = 0
+		while not slotsFolder and attempts < 20 and newModel.Parent do
+			task.wait(0.5)
+			slotsFolder = newModel:FindFirstChild("Slots")
+			attempts = attempts + 1
+			print(string.format("[PlacedJuices] ⏳ Esperando Slots... intento %d/20", attempts))
+		end
+
+		if not slotsFolder then
+			warn("[PlacedJuices] ❌ CRÍTICO: Slots no encontrado después de 10 segundos")
+			warn("[PlacedJuices] Hijos del modelo:", table.concat((function()
+				local names = {}
+				for _, child in ipairs(newModel:GetChildren()) do
+					table.insert(names, child.Name)
+				end
+				return names
+			end)(), ", "))
+			return
+		end
+
+		print("[PlacedJuices] ✅ Slots encontrado")
+
+		-- Buscar Place
+		local placeFolder = slotsFolder:FindFirstChild("Place")
+		attempts = 0
+		while not placeFolder and attempts < 20 and newModel.Parent do
+			task.wait(0.5)
+			placeFolder = slotsFolder:FindFirstChild("Place")
+			attempts = attempts + 1
+			print(string.format("[PlacedJuices] ⏳ Esperando Place... intento %d/20", attempts))
+		end
+
+		if not placeFolder then
+			warn("[PlacedJuices] ❌ CRÍTICO: Place no encontrado")
+			return
+		end
+
+		print("[PlacedJuices] ✅ Place encontrado")
+		print("[PlacedJuices] 📊 Slots disponibles:", #placeFolder:GetChildren())
+
+		-- Espera adicional para slots individuales
+		task.wait(2)
+
+		-- Recrear jugos
+		local placedJuices = player:FindFirstChild("PlacedJuices")
+		if not placedJuices then
+			print("[PlacedJuices] ⚠️ No hay jugos para recrear")
+			return
+		end
+
+		local juicesToRecreate = {}
+		for _, juiceFolder in ipairs(placedJuices:GetChildren()) do
+			if juiceFolder:IsA("Folder") then
+				local slotValue = juiceFolder:FindFirstChild("Slot")
+				if slotValue and slotValue:IsA("IntValue") and slotValue.Value > 0 then
+					table.insert(juicesToRecreate, {
+						folder = juiceFolder,
+						slot = slotValue.Value,
+						name = juiceFolder.Name
+					})
+				end
+			end
+		end
+
+		print(string.format("[PlacedJuices] 📋 Jugos a recrear: %d", #juicesToRecreate))
+
+		for i, juiceInfo in ipairs(juicesToRecreate) do
+			if not SlotTracker.hasPlayerData(userId) or not newModel.Parent then
+				print("[PlacedJuices] ❌ Abortando recreación")
+				return
+			end
+
+			print(string.format("[PlacedJuices] [%d/%d] 🔨 Recreando '%s' en slot %d",
+				i, #juicesToRecreate, juiceInfo.name, juiceInfo.slot))
+
+			-- Buscar slot con espera activa
+			local slotModel = placeFolder:FindFirstChild(tostring(juiceInfo.slot))
+			local slotAttempts = 0
+			while not slotModel and slotAttempts < 10 and newModel.Parent do
+				task.wait(0.5)
+				slotModel = placeFolder:FindFirstChild(tostring(juiceInfo.slot))
+				slotAttempts = slotAttempts + 1
+			end
+
+			if slotModel then
+				print(string.format("[PlacedJuices] ✅ Slot %d OK, creando jugo...", juiceInfo.slot))
+				processPlacedJuice(player, juiceInfo.folder)
+				task.wait(0.2)
+			else
+				warn(string.format("[PlacedJuices] ❌ Slot %d NO ENCONTRADO", juiceInfo.slot))
+			end
+		end
+
+		print(string.format("[PlacedJuices] ✅ Recreación completada: %d jugos", #juicesToRecreate))
+
+		-- Reconectar CollectZone
+		print("[PlacedJuices] 🔌 Reconectando CollectZone...")
+		task.wait(1)
+
+		local collectZone = slotsFolder:FindFirstChild("CollectZone")
+		attempts = 0
+		while not collectZone and attempts < 10 and newModel.Parent do
+			task.wait(0.5)
+			collectZone = slotsFolder:FindFirstChild("CollectZone")
+			attempts = attempts + 1
+		end
+
+		if collectZone then
+			print("[PlacedJuices] ✅ CollectZone encontrada, conectando...")
+			connectCollectZoneEvent(player)
+			setupCollectZoneGuiUpdater(player)
+			print("[PlacedJuices] ✅ CollectZone ACTIVA")
+		else
+			warn("[PlacedJuices] ❌ CollectZone NO ENCONTRADA")
+		end
+
+		print("[PlacedJuices] ========================================")
+		print("[PlacedJuices] ✅ SISTEMA COMPLETAMENTE FUNCIONAL")
+		print("[PlacedJuices] ========================================")
+	end
 
 	-- Cuando se añade un juice
 	placedJuices.ChildAdded:Connect(function(child)

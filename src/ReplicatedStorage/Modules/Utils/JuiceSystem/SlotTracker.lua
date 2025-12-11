@@ -313,6 +313,24 @@ function SlotTracker.clearCollectZoneGuiConnection(userId)
 	end
 end
 
+-- Establece la conexión de monitoreo de modelo
+function SlotTracker.setModelMonitorConnection(userId, connection)
+	if not playerData[userId] then return end
+	playerData[userId].modelMonitorConnection = connection
+end
+
+-- Limpia la conexión de monitoreo de modelo
+function SlotTracker.clearModelMonitorConnection(userId)
+	if not playerData[userId] then return end
+
+	if playerData[userId].modelMonitorConnection then
+		pcall(function()
+			playerData[userId].modelMonitorConnection:Disconnect()
+		end)
+		playerData[userId].modelMonitorConnection = nil
+	end
+end
+
 -- Agrega una conexión de modelo
 function SlotTracker.addModelConnection(userId, connection)
 	if not playerData[userId] then return end
@@ -412,6 +430,9 @@ function SlotTracker.cleanupJuiceData(userId)
 	-- Limpiar CollectZone
 	SlotTracker.clearCollectZoneConnection(userId)
 	SlotTracker.clearCollectZoneGuiConnection(userId)
+
+	-- Limpiar monitoreo de modelo
+	SlotTracker.clearModelMonitorConnection(userId)
 end
 
 -- Limpia todos los slots CON DESTRUCCIÓN de objetos físicos
