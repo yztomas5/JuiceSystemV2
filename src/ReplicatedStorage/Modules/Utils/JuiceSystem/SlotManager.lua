@@ -335,22 +335,26 @@ function SlotManager.placeJuiceInSlot(player, slotNumber, placeSlotModel, proxim
 	local juicesFolder = inventory:FindFirstChild("Juices")
 	if not juicesFolder then return end
 
-	local juiceFolder = juicesFolder:FindFirstChild(tool.Name)
+	-- BUSCAR EN TODOS LOS FOLDERS CON EL MISMO NOMBRE hasta encontrar el que tenga el ID correcto
+	local juiceFolder = nil
+	for _, folder in ipairs(juicesFolder:GetChildren()) do
+		if folder:IsA("Folder") and folder.Name == tool.Name then
+			local juiceFolderId = folder:FindFirstChild("Id")
+			if juiceFolderId and juiceFolderId:IsA("IntValue") and juiceFolderId.Value == toolId.Value then
+				juiceFolder = folder
+				break
+			end
+		end
+	end
+
 	if not juiceFolder then
 		if warningEvent then
-			warningEvent:FireClient(player, "Juice not found in inventory!", COLOR_ERROR)
+			warningEvent:FireClient(player, "Juice not found in inventory with matching ID!", COLOR_ERROR)
 		end
 		return
 	end
 
-	-- Verificar ID
-	local juiceFolderId = juiceFolder:FindFirstChild("Id")
-	if not juiceFolderId or not juiceFolderId:IsA("IntValue") or juiceFolderId.Value ~= toolId.Value then
-		if warningEvent then
-			warningEvent:FireClient(player, "Juice ID mismatch!", COLOR_ERROR)
-		end
-		return
-	end
+	-- Ya encontramos el folder correcto con nombre e ID coincidentes
 
 	-- Mover a PlacedJuices
 	local placedJuicesFolder = player:FindFirstChild("PlacedJuices")
@@ -363,6 +367,7 @@ function SlotManager.placeJuiceInSlot(player, slotNumber, placeSlotModel, proxim
 	juiceFolder.Parent = placedJuicesFolder
 
 	-- Eliminar Id
+	local juiceFolderId = juiceFolder:FindFirstChild("Id")
 	if juiceFolderId then
 		juiceFolderId:Destroy()
 	end
